@@ -1,6 +1,7 @@
 # generate data: python script that does the daily GWAS data collection
 
 import pandas as pd
+import re
 import traceback
 import json
 import logging
@@ -64,7 +65,6 @@ def setup_logging(logpath):
     logger.addHandler(fh)
     logger.addHandler(ch)
     return logger
-
 
 def create_summarystats(data_path):
     """
@@ -773,6 +773,55 @@ def clean_gwas_cat(data_path):
                                     index_col=False)
         Cat_Anc = pd.merge(Cat_Anc, cleaner_broad, how='left',
                            on='BROAD ANCESTRAL')
+        
+        #------------------------- MAPPING TO FATUMO ET AL. 2021 #-------------------------
+        def map_to_9(val):
+            """Map any of the ~215 raw ancestries into the 9 super‐populations used in Fatumo et al. 2021."""
+            # 1) strip out any parenthetical "(…)" content
+            cleaned = re.sub(r'\([^)]*\)', '', val).strip()
+            # 2) split only on commas
+            terms = [t.strip() for t in cleaned.split(',')]
+            # 3) If every term mentions "African" → African
+            if all(re.search(r'(?i)African', t) for t in terms):
+                return "African"
+            # 4) exact match: Native American, Other → Other
+            if cleaned.lower() == "native american, other":
+                return "Other"
+            # 5) anything else with a comma → Multiple
+            if "," in cleaned:
+                return "Multiple"
+            # 6) now the single terms
+            if re.search(r'(?i)\bEuropean\b', cleaned):
+                return "European"
+            if re.search(r'(?i)\bSouth[ -]?East Asian\b', cleaned):
+                return "South Asian/other Asian"
+            if re.search(r'(?i)\bEast Asian\b', cleaned):
+                return "East Asian"
+            if re.search(r'(?i)\bAsian\b', cleaned):
+                return "South Asian/other Asian"
+            if re.search(r'(?i)\bAfrican\b', cleaned):
+                return "African"
+            if re.search(r'(?i)Hispanic|Latino', cleaned):
+                return "Hispanic/Latino"
+            if re.search(r'(?i)^Greater Middle Eastern\b', cleaned):
+                return "Greater Middle Eastern"
+            if re.search(r'(?i)\bOcean', cleaned):
+                return "Oceanic"
+            if re.search(r'(?i)\bOther\b', cleaned):
+                return "Other"
+            # fallback (shouldn't happen if your 215 map cleanly)
+            return None
+        
+        #------------------------- END OF FUNCTION #-------------------------
+        
+        # Apply the mapping function to the 'BROAD ANCESTRAL' column
+        Cat_Anc['Broader'] = Cat_Anc['BROAD ANCESTRAL']\
+            .astype(str)\
+            .apply(map_to_9)
+        
+        # Drop anything that didn’t map (just in case)
+        Cat_Anc = Cat_Anc[Cat_Anc['Broader'].notnull()]
+
         Cat_Anc['Dates'] = [pd.to_datetime(d) for d in Cat_Anc['DATE']]
         Cat_Anc['N'] = pd.to_numeric(Cat_Anc['N'], errors='coerce')
         Cat_Anc = Cat_Anc[Cat_Anc['N'].notnull()]
@@ -790,9 +839,11 @@ def clean_gwas_cat(data_path):
             diversity_logger.info('No missing Broader terms! Nice!')
         Cat_Anc = Cat_Anc[Cat_Anc['Broader'].notnull()]
         Cat_Anc = Cat_Anc[Cat_Anc['N'].notnull()]
+        # Cat_Anc.to_csv(os.path.join(data_path, 'catalog', 'synthetic', 'Cat_Anc_wBroader.tsv'),
+        #                sep='\t',
+        #                index=False)
         Cat_Anc.to_csv(os.path.join(data_path, 'catalog', 'synthetic', 'Cat_Anc_wBroader.tsv'),
-                       sep='\t',
-                       index=False)
+                        sep='\t', index=False)
         diversity_logger.info('Clean of the raw GWAS Catalog datasets: Complete')
     except Exception as e:
         diversity_logger.debug(f'Clean of the raw GWAS Catalog datasets: Failed -- {e}')
